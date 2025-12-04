@@ -1,133 +1,88 @@
-const express = require("express");
-const { Client, middleware } = require("@line/bot-sdk");
-const { google } = require("googleapis");
-
-// LINE config 
-const config = {
-  channelAccessToken: process.env.LINE_ACCESS_TOKEN,
-  channelSecret: process.env.LINE_CHANNEL_SECRET
-};
-
-// Google Sheet Config
-const SHEET_ID = process.env.SHEET_ID; 
-const GOOGLE_SERVICE_ACCOUNT = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-
-const sheetsClient = new google.auth.JWT(
-  GOOGLE_SERVICE_ACCOUNT.client_email,
-  null,
-  GOOGLE_SERVICE_ACCOUNT.private_key,
-  ["https://www.googleapis.com/auth/spreadsheets"]
-);
+import express from "express";
+import bodyParser from "body-parser";
+import { google } from "googleapis";
+import line from "@line/bot-sdk";
+import fs from "fs";
 
 const app = express();
-app.use(express.json());
+app.use(bodyParser.json());
+app.use(express.static("public"));
 
-// 建立 LINE 客戶端
-const client = new Client(config);
+/** ---------------- LINE BOT ---------------- **/
+const config = {
+  channelAccessToken: "你的LINE_CHANNEL_ACCESS_TOKEN",
+  channelSecret: "你的LINE_CHANNEL_SECRET",
+};
+const client = new line.Client(config);
 
-// Google Sheet: 寫入資料
-async function appendUserData(userId, unitCode) {
-  const sheets = google.sheets({ version: "v4", auth: sheetsClient });
-  return sheets.spreadsheets.values.append({
-    spreadsheetId: SHEET_ID,
-    range: "Users!A:D",
-    valueInputOption: "USER_ENTERED",
-    resource: {
-      values: [[userId, unitCode, new Date().toISOString()]]
-    }
-  });
-}
-
-// Google Sheet: 檢查是否已綁定
-async function isUserBound(userId) {
-  const sheets = google.sheets({ version: "v4", auth: sheetsClient });
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
-    range: "Users!A:B"
-  });
-
-  const rows = res.data.values || [];
-  return rows.some(r => r[0] === userId);
-}
-
-// 檢查戶號是否正確
-function validateUnitCode(code) {
-  if (!code || code.length < 3 || code.length > 4) return false;
-
-  // 拆解
-  const floor = parseInt(code.match(/^\d+/)?.[0]);
-  const building = code.match(/[ABC]/)?.[0];
-  const unit = parseInt(code.match(/\d+$/)?.[0]);
-
-  if (!floor || floor < 1 || floor > 19) return false;
-  if (!["A", "B", "C"].includes(building)) return false;
-
-  // A / C 是 1~3
-  if (building === "A" || building === "C") {
-    if (unit < 1 || unit > 3) return false;
-  }
-
-  // B 是 1~4
-  if (building === "B") {
-    if (unit < 1 || unit > 4) return false;
-  }
-
-  return true;
-}
-
-// 處理 Webhook
-app.post("/webhook", middleware(config), async (req, res) => {
+app.post("/webhook", line.middleware(config), async (req, res) => {
   const events = req.body.events;
-
-  events.forEach(async (event) => {
-    const userId = event.source?.userId;
-
-    // 1. 用戶加入好友 follow
-    if (event.type === "follow") {
-      await client.replyMessage(event.replyToken, {
-        type: "text",
-        text: "歡迎加入 📦\n請輸入您的戶號（例如：11A1）以完成綁定。"
-      });
-      return;
-    }
-
-    // 2. 用戶傳送文字（戶號綁定）
+  for (const event of events) {
     if (event.type === "message" && event.message.type === "text") {
-      const text = event.message.text.toUpperCase();
+      const userId = event.source.userId;
+      const content = event.message.text.trim().toUpperCase();
 
-      // 已綁定過
-      if (await isUserBound(userId)) {
+      // 簡單驗證格式 (例如 11A1, 5B3)
+      if (/^\d{1,2}[A-C]\d$/.test(content)) {
+        await addToSheet(userId, content);
         await client.replyMessage(event.replyToken, {
           type: "text",
-          text: "您已經完成綁定囉 🎉\n若需修改戶號請聯絡管理員。"
+          text: `已登記戶號: ${content}`,
         });
-        return;
-      }
-
-      // 戶號格式檢查
-      if (!validateUnitCode(text)) {
+      } else {
         await client.replyMessage(event.replyToken, {
           type: "text",
-          text: "戶號格式不正確 🧐\n請輸入像「11A1」這樣的格式。"
+          text: `格式錯誤，請輸入正確戶號，如 11A1`,
         });
-        return;
       }
-
-      // 寫入 Google Sheet
-      await appendUserData(userId, text);
-
-      await client.replyMessage(event.replyToken, {
-        type: "text",
-        text: `已完成綁定 🎉\n您的戶號是：${text}\n之後有包裹會自動通知您！📦`
-      });
     }
-  });
-
+  }
   res.sendStatus(200);
 });
 
-// Render 的 PORT
+/** ---------------- Google Sheet ---------------- **/
+const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
+const CREDENTIALS = JSON.parse(fs.readFileSync("credentials.json"));
+
+const auth = new google.auth.GoogleAuth({
+  credentials: CREDENTIALS,
+  scopes: SCOPES,
+});
+
+const sheets = google.sheets({ version: "v4", auth });
+
+const SPREADSHEET_ID = "你的GoogleSheetID";
+const SHEET_NAME = "Sheet1";
+
+async function addToSheet(userId, unitCode) {
+  const now = new Date().toISOString();
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${SHEET_NAME}!A:C`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: {
+      values: [[userId, unitCode, now]],
+    },
+  });
+}
+
+/** ---------------- 管理頁面 ---------------- **/
+app.get("/admin", async (req, res) => {
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${SHEET_NAME}!A:C`,
+  });
+  const rows = response.data.values || [];
+  let html = `<h2>已登記住戶清單</h2><table border="1"><tr><th>UserId</th><th>戶號</th><th>登記時間</th></tr>`;
+  rows.forEach((r) => {
+    html += `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`;
+  });
+  html += `</table>`;
+  res.send(html);
+});
+
+/** ---------------- 啟動伺服器 ---------------- **/
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server running on ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
