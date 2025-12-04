@@ -2,7 +2,6 @@ import express from "express";
 import bodyParser from "body-parser";
 import { google } from "googleapis";
 import line from "@line/bot-sdk";
-import fs from "fs";
 
 const app = express();
 app.use(bodyParser.json());
@@ -10,8 +9,8 @@ app.use(express.static("public"));
 
 /** ---------------- LINE BOT ---------------- **/
 const config = {
-  channelAccessToken: "你的LINE_CHANNEL_ACCESS_TOKEN",
-  channelSecret: "你的LINE_CHANNEL_SECRET",
+  channelAccessToken: process.env.LINE_ACCESS_TOKEN,
+  channelSecret: process.env.LINE_CHANNEL_SECRET,
 };
 const client = new line.Client(config);
 
@@ -22,12 +21,11 @@ app.post("/webhook", line.middleware(config), async (req, res) => {
       const userId = event.source.userId;
       const content = event.message.text.trim().toUpperCase();
 
-      // 簡單驗證格式 (例如 11A1, 5B3)
       if (/^\d{1,2}[A-C]\d$/.test(content)) {
-        await addToSheet(userId, content);
+        await addOrUpdateUser(userId, content);
         await client.replyMessage(event.replyToken, {
           type: "text",
-          text: `已登記戶號: ${content}`,
+          text: `已登記/更新戶號: ${content}`,
         });
       } else {
         await client.replyMessage(event.replyToken, {
@@ -42,7 +40,7 @@ app.post("/webhook", line.middleware(config), async (req, res) => {
 
 /** ---------------- Google Sheet ---------------- **/
 const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
-const CREDENTIALS = JSON.parse(fs.readFileSync("credentials.json"));
+const CREDENTIALS = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
 
 const auth = new google.auth.GoogleAuth({
   credentials: CREDENTIALS,
@@ -50,20 +48,38 @@ const auth = new google.auth.GoogleAuth({
 });
 
 const sheets = google.sheets({ version: "v4", auth });
-
-const SPREADSHEET_ID = "你的GoogleSheetID";
+const SPREADSHEET_ID = process.env.SHEET_ID;
 const SHEET_NAME = "Sheet1";
 
-async function addToSheet(userId, unitCode) {
+async function addOrUpdateUser(userId, unitCode) {
   const now = new Date().toISOString();
-  await sheets.spreadsheets.values.append({
+  const response = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range: `${SHEET_NAME}!A:C`,
-    valueInputOption: "USER_ENTERED",
-    requestBody: {
-      values: [[userId, unitCode, now]],
-    },
   });
+  const rows = response.data.values || [];
+
+  const index = rows.findIndex((r) => r[0] === userId);
+
+  if (index >= 0) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!B${index + 1}:C${index + 1}`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [[unitCode, now]],
+      },
+    });
+  } else {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!A:C`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [[userId, unitCode, now]],
+      },
+    });
+  }
 }
 
 /** ---------------- 管理頁面 ---------------- **/
