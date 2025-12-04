@@ -5,8 +5,8 @@ const line = require('@line/bot-sdk');
 const path = require('path');
 
 const config = {
-  channelAccessToken: '你的Channel Access Token',
-  channelSecret: '你的Channel Secret'
+  channelAccessToken: '4BY6jf4IkA05sVjHNuVcncYgt2SuvKRRnnhEqiEhLnSdcumfT1SvI+YpMg0yIDXqS9SM/bGzgmWnLsNYlbAge3khYHAE71hYm+QYKJiKxk5MWnyR1ZZBOvfDF4usd695/o1aBs/zGqJhfIfFyT/vnwdB04t89/1O/w1cDnyilFU=',
+  channelSecret: 'f1990bc9dff35842b7f4d445c232bb13'
 };
 
 const client = new line.Client(config);
