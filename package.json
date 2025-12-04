@@ -6,6 +6,7 @@
   },
   "dependencies": {
     "express": "^4.19.0",
-    "@line/bot-sdk": "^7.5.0"
+    "@line/bot-sdk": "^7.5.0",
+    "googleapis": "^118.0.0"
   }
 }
