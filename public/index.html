@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>包裹管理後台</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    input, button { padding: 5px; margin: 5px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+    th, td { border: 1px solid #ccc; padding: 5px; text-align: center; }
+  </style>
+</head>
+<body>
+  <h1>包裹管理後台</h1>
+
+  <h2>新增包裹</h2>
+  <form id="addForm">
+    住戶姓名: <input type="text" id="name" required>
+    UserId: <input type="text" id="userId" required>
+    包裹內容: <input type="text" id="content" required>
+    <button type="submit">新增</button>
+  </form>
+
+  <h2>包裹列表</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>姓名</th>
+        <th>UserId</th>
+        <th>內容</th>
+        <th>已領取</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody id="parcelTable"></tbody>
+  </table>
+
+  <script>
+    async function loadParcels() {
+      const res = await fetch('/api/parcels');
+      const parcels = await res.json();
+      const tbody = document.getElementById('parcelTable');
+      tbody.innerHTML = '';
+      parcels.forEach(p => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${p.id}</td>
+          <td>${p.name}</td>
+          <td>${p.userId}</td>
+          <td>${p.content}</td>
+          <td>${p.pickedUp ? '✅' : '❌'}</td>
+          <td>${!p.pickedUp ? `<button onclick="pickup(${p.id})">標記已領取</button>` : ''}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function pickup(id) {
+      await fetch('/api/pickup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      });
+      loadParcels();
+    }
+
+    document.getElementById('addForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const name = document.getElementById('name').value;
+      const userId = document.getElementById('userId').value;
+      const content = document.getElementById('content').value;
+      await fetch('/api/add-parcel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, userId, content })
+      });
+      document.getElementById('addForm').reset();
+      loadParcels();
+    });
+
+    loadParcels();
+  </script>
+</body>
+</html>
