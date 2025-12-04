@@ -9,6 +9,8 @@
     "express": "^4.19.0",
     "@line/bot-sdk": "^7.5.0",
     "googleapis": "^118.0.0",
-    "body-parser": "^1.20.0"
+    "qrcode": "^1.5.1",
+    "body-parser": "^1.20.2"
   }
 }
+
