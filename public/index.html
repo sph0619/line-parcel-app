@@ -2,138 +2,68 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
-<title>管理員介面</title>
+<title>管理員包裹管理</title>
 <style>
-  body { font-family: sans-serif; padding: 20px; }
-  table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
-  th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
-  input, select, button { padding: 5px; margin: 2px; }
+  #scanner { width: 300px; height: 200px; border: 1px solid #ccc; }
+  #houseId { width: 100px; }
+  .parcel-log { margin-top: 10px; max-height: 200px; overflow-y: auto; border: 1px solid #ddd; padding: 5px; }
 </style>
 </head>
 <body>
-
-<h1>管理員介面</h1>
-
-<h2>住戶資料</h2>
-<table id="usersTable">
-  <thead>
-    <tr>
-      <th>戶名</th>
-      <th>姓名</th>
-      <th>LINE userId</th>
-      <th>操作</th>
-    </tr>
-  </thead>
-  <tbody></tbody>
-</table>
-
-<h2>包裹資料</h2>
-<table id="parcelsTable">
-  <thead>
-    <tr>
-      <th>條碼號碼</th>
-      <th>戶名</th>
-      <th>狀態</th>
-      <th>操作</th>
-    </tr>
-  </thead>
-  <tbody></tbody>
-</table>
-
 <h2>新增包裹</h2>
-<form id="addParcelForm">
-  條碼號碼: <input type="text" name="parcelId" required>
-  戶名: <input type="text" name="houseId" required>
-  <button type="submit">新增</button>
-</form>
-<button id="scanBtn">用相機掃描條碼</button>
-<video id="preview" width="300" height="200" style="border:1px solid black;"></video>
+<input type="text" id="houseId" placeholder="輸入戶名">
+<video id="scanner"></video>
+<div class="parcel-log" id="log"></div>
 
-<script type="module">
-import QrScanner from "https://cdn.jsdelivr.net/npm/qr-scanner@1.4.2/qr-scanner.min.js";
+<script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
+<script>
+const codeReader = new ZXing.BrowserMultiFormatReader();
+const videoElement = document.getElementById('scanner');
+const logEl = document.getElementById('log');
+let scanning = false;
 
-const video = document.getElementById('preview');
-const scanner = new QrScanner(video, result => {
-  document.querySelector('input[name="parcelId"]').value = result;
-  scanner.stop();
-});
+// 開始掃描
+async function startScanner() {
+  if (scanning) return;
+  scanning = true;
+  const devices = await codeReader.listVideoInputDevices();
+  if (!devices.length) return alert("找不到相機");
+  const selectedDeviceId = devices[0].deviceId;
 
-document.getElementById('scanBtn').onclick = () => scanner.start();
+  codeReader.decodeFromVideoDevice(selectedDeviceId, videoElement, async (result, err) => {
+    if (result) {
+      const parcelId = result.text.trim();
+      const houseId = document.getElementById('houseId').value.trim();
+      if (!houseId) return alert("請先輸入戶名");
 
-// 用 fetch 載入使用者與包裹資料
-async function loadData() {
-  const users = await fetch('/api/users').then(r => r.json());
-  const parcels = await fetch('/api/parcels').then(r => r.json());
-
-  const usersTbody = document.querySelector('#usersTable tbody');
-  usersTbody.innerHTML = '';
-  users.forEach(u => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${u.houseId}</td>
-      <td>${u.name}</td>
-      <td>${u.userId}</td>
-      <td>
-        <button onclick="deleteUser('${u.houseId}')">刪除</button>
-      </td>
-    `;
-    usersTbody.appendChild(tr);
-  });
-
-  const parcelsTbody = document.querySelector('#parcelsTable tbody');
-  parcelsTbody.innerHTML = '';
-  parcels.forEach(p => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${p.parcelId}</td>
-      <td>${p.houseId}</td>
-      <td>${p.status}</td>
-      <td>
-        <button onclick="markCollected('${p.parcelId}')">已領取</button>
-      </td>
-    `;
-    parcelsTbody.appendChild(tr);
+      // 傳到後端
+      try {
+        const res = await fetch('/api/addParcel', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ parcelId, houseId })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          logEl.innerHTML += `<div>✅ ${houseId} 已新增包裹: ${parcelId}</div>`;
+          document.getElementById('houseId').value = ''; // 清空戶名欄位
+        } else {
+          logEl.innerHTML += `<div style="color:red;">❌ 新增失敗: ${data.error}</div>`;
+        }
+        logEl.scrollTop = logEl.scrollHeight;
+      } catch(e) {
+        logEl.innerHTML += `<div style="color:red;">❌ 網路錯誤: ${e}</div>`;
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+    }
+    if (err && !(err instanceof ZXing.NotFoundException)) {
+      console.error(err);
+    }
   });
 }
 
-// 新增包裹
-document.getElementById('addParcelForm').onsubmit = async e => {
-  e.preventDefault();
-  const form = e.target;
-  await fetch('/api/addParcel', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      parcelId: form.parcelId.value,
-      houseId: form.houseId.value
-    })
-  });
-  form.reset();
-  loadData();
-};
-
-// 標記包裹已領取
-async function markCollected(parcelId) {
-  await fetch('/api/markCollected', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ parcelId })
-  });
-  loadData();
-}
-
-// 刪除住戶
-async function deleteUser(houseId) {
-  await fetch('/api/deleteUser', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ houseId })
-  });
-  loadData();
-}
-
-loadData();
+// 啟動掃描
+startScanner();
 </script>
-
 </body>
 </html>
