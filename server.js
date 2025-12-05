@@ -1,7 +1,6 @@
-// server.js
 import express from "express";
 import { middleware, Client } from "@line/bot-sdk";
-import { addUser, getUsers, addParcel, markParcelsCollected } from "./service.js";
+import { getUsers, addOrUpdateUser, addParcel, markParcelCollected, deleteUser, getParcels } from "./service.js";
 
 const config = {
   channelAccessToken: process.env.LINE_ACCESS_TOKEN,
@@ -17,7 +16,6 @@ app.use(express.json({
   }
 }));
 
-// ---------- LINE Webhook ----------
 app.post("/webhook", middleware(config), async (req, res) => {
   const events = req.body.events;
   const client = new Client(config);
@@ -27,29 +25,29 @@ app.post("/webhook", middleware(config), async (req, res) => {
       const text = event.message.text.trim();
       const userId = event.source.userId;
 
-      // 驗證戶名格式 (假設 11A1 這種格式)
-      const validHouse = /^[0-9]{2}[A-Z][0-9]$/i.test(text);
-      if (!validHouse) {
+      // 假設輸入格式：11A1 小明
+      const match = text.match(/^(\S+)\s+(.+)$/);
+      if (!match) {
         await client.replyMessage(event.replyToken, {
           type: "text",
-          text: "戶名格式錯誤，請輸入正確格式，如 11A1"
+          text: "請輸入正確格式，例如：11A1 小明"
         });
         continue;
       }
 
-      // 自動判斷新使用者 / 已存在使用者
-      const users = await getUsers();
-      const existing = users.find(u => u[1] === userId);
-      if (!existing) {
-        await addUser(text.toUpperCase(), userId, "住戶");
+      const [_, houseId, name] = match;
+
+      try {
+        await addOrUpdateUser(houseId, userId, name);
         await client.replyMessage(event.replyToken, {
           type: "text",
-          text: `您好，${text.toUpperCase()} 已登記完成！`
+          text: `已登記：${houseId} - ${name}`
         });
-      } else {
+      } catch (err) {
+        console.error(err);
         await client.replyMessage(event.replyToken, {
           type: "text",
-          text: `您的資料已存在，戶名: ${existing[0]}`
+          text: "登記時發生錯誤，請稍後再試"
         });
       }
     }
@@ -58,50 +56,40 @@ app.post("/webhook", middleware(config), async (req, res) => {
   res.status(200).end();
 });
 
-// ---------- 管理員 API ----------
-// 新增包裹 (連續掃描前端)
-app.post("/api/addParcel", async (req, res) => {
+// 管理員網頁 API
+app.get("/admin/users", async (req, res) => {
+  const users = await getUsers();
+  res.json(users);
+});
+
+app.get("/admin/parcels", async (req, res) => {
+  const parcels = await getParcels();
+  res.json(parcels);
+});
+
+app.post("/admin/parcels", express.json(), async (req, res) => {
+  const { parcelId, houseId } = req.body;
   try {
-    const { parcelId, houseId } = req.body;
-    if (!parcelId || !houseId) return res.json({ ok: false, error: "缺少參數" });
-
-    // 加入 Google Sheet
-    await addParcel(parcelId, houseId.toUpperCase());
-
-    // 自動 LINE 通知住戶
-    const users = await getUsers();
-    const user = users.find(u => u[0].toUpperCase() === houseId.toUpperCase());
-    if (user) {
-      const client = new Client(config);
-      await client.pushMessage(user[1], {
-        type: "text",
-        text: `📦 您有新的包裹到達！條碼: ${parcelId}`
-      });
-    }
-
-    res.json({ ok: true });
-  } catch (e) {
-    console.error(e);
-    res.json({ ok: false, error: e.message });
+    await addParcel(parcelId, houseId);
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ success: false, error: err.message });
   }
 });
 
-// 標記包裹已領取
-app.post("/api/collectParcel", async (req, res) => {
+app.post("/admin/collect", express.json(), async (req, res) => {
+  const { parcelId } = req.body;
   try {
-    const { houseId } = req.body;
-    if (!houseId) return res.json({ ok: false, error: "缺少戶名" });
-    await markParcelsCollected(houseId.toUpperCase());
-    res.json({ ok: true });
-  } catch (e) {
-    console.error(e);
-    res.json({ ok: false, error: e.message });
+    await markParcelCollected(parcelId);
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ success: false, error: err.message });
   }
 });
 
-// 測試 server
 app.get("/", (req, res) => res.send("LINE bot running!"));
 
-// 啟動 server
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log("Server running on " + port));
