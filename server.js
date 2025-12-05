@@ -1,81 +1,108 @@
-import express from 'express';
-import bodyParser from 'body-parser';
-import { Client, middleware } from '@line/bot-sdk';
-import QRCode from 'qrcode';
-import * as service from './service.js';
+import express from "express";
+import { Client, middleware } from "@line/bot-sdk";
+import { GoogleSheetService } from "./googleSheetService.js";
 
 const app = express();
-app.use(bodyParser.json());
+app.use(express.json());
 
+// LINE config
 const config = {
-  channelAccessToken: process.env.LINE_ACCESS_TOKEN,
-  channelSecret: process.env.LINE_CHANNEL_SECRET
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+  channelSecret: process.env.LINE_CHANNEL_SECRET,
 };
 
+// LINE client
 const client = new Client(config);
 
-// LINE webhook
-app.post('/webhook', middleware(config), async (req, res) => {
-  try {
-    const events = req.body.events;
-    for (const event of events) {
-      if (event.type === 'message' && event.message.type === 'text') {
-        const userId = event.source.userId;
-        const msg = event.message.text.trim();
+// Google Sheet Service 初始化（用 try/catch 防止 webhook 500）
+let sheetService;
+try {
+  sheetService = new GoogleSheetService(
+    process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
+    process.env.SHEET_ID
+  );
+  console.log("[Sheet] GoogleSheetService 初始化成功");
+} catch (err) {
+  console.error("[Sheet] 初始化失敗：", err);
+}
 
-        // 簡單判斷是否符合戶名格式
-        if (/^\d+[A-C]\d+$/.test(msg)) {
-          await service.addUser(msg, userId, '住戶');
-          await client.replyMessage(event.replyToken, { type: 'text', text: `已登記 ${msg}` });
-        } else {
-          await client.replyMessage(event.replyToken, { type: 'text', text: '請輸入正確戶號，例如 11A1' });
+app.post("/webhook", middleware(config), async (req, res) => {
+  try {
+    // LINE Verify 時 events 可能不存在
+    const events = req.body.events || [];
+
+    for (const event of events) {
+      try {
+        // 只處理文字訊息
+        if (event.type === "message" && event.message.type === "text") {
+          const userId = event.source.userId;
+          const msg = event.message.text.trim();
+          const replyToken = event.replyToken;
+
+          // 預防 GoogleSheetService 尚未初始化成功
+          if (!sheetService) {
+            await client.replyMessage(replyToken, {
+              type: "text",
+              text: "❌ Google Sheet 初始化失敗，請聯絡管理員。",
+            });
+            continue;
+          }
+
+          // 查看資料
+          if (msg === "查看會員名單") {
+            const users = await sheetService.getUsers();
+            const text = users.length
+              ? users.join("\n")
+              : "目前沒有紀錄任何會員。";
+
+            await client.replyMessage(replyToken, {
+              type: "text",
+              text,
+            });
+            continue;
+          }
+
+          // 加入會員
+          if (msg.startsWith("加入會員")) {
+            const name = msg.replace("加入會員", "").trim();
+            if (!name) {
+              await client.replyMessage(replyToken, {
+                type: "text",
+                text: "請輸入會員名稱，例如：加入會員 王小明",
+              });
+              continue;
+            }
+
+            await sheetService.addUser({ userId, name });
+
+            await client.replyMessage(replyToken, {
+              type: "text",
+              text: `已加入會員：${name}`,
+            });
+            continue;
+          }
+
+          // 其他訊息回覆
+          await client.replyMessage(replyToken, {
+            type: "text",
+            text: `你說的是：${msg}`,
+          });
         }
+      } catch (eventErr) {
+        console.error("[Event Error]", eventErr);
       }
     }
+
+    // 🔥 最重要：無論如何 ALWAYS 回 200 給 LINE
     res.sendStatus(200);
   } catch (err) {
-    console.error(err);
-    res.sendStatus(500);
+    console.error("[Webhook Error]", err);
+    res.sendStatus(200); // 任何錯誤仍回 200，避免 Verify 失敗
   }
 });
 
-// 管理頁面
-app.get('/admin', async (req, res) => {
-  const users = await service.getUsers();
-  const parcels = await service.getParcels();
-  let html = `<h1>管理端</h1>`;
-  html += `<h2>住戶</h2><ul>`;
-  users.forEach(u => html += `<li>${u[0]} / ${u[1]} / ${u[2]}</li>`);
-  html += `</ul><h2>包裹</h2><ul>`;
-  parcels.forEach(p => html += `<li>${p[1]} / ${p[0]} / ${p[2]}</li>`);
-  html += `</ul>`;
-  res.send(html);
-});
+// Render 需要這段，否則會休眠
+app.get("/", (_, res) => res.send("LINE bot is running"));
 
-// 新增包裹 & 發送 QR
-app.post('/parcel', async (req, res) => {
-  const { parcelId, houseId } = req.body;
-  await service.addParcel(parcelId, houseId);
-
-  // 生成 QR Code
-  const qrText = `house:${houseId}`;
-  const qrDataUrl = await QRCode.toDataURL(qrText);
-
-  // 發送給戶內所有 userId
-  const users = await service.getUsers();
-  const targets = users.filter(u => u[0] === houseId).map(u => u[1]);
-  for (const id of targets) {
-    await client.pushMessage(id, { type: 'text', text: `有新包裹: ${parcelId}` });
-    await client.pushMessage(id, { type: 'image', originalContentUrl: qrDataUrl, previewImageUrl: qrDataUrl });
-  }
-  res.json({ ok: true });
-});
-
-// QR 核銷
-app.post('/collect', async (req, res) => {
-  const { houseId } = req.body;
-  await service.markParcelsCollected(houseId);
-  res.json({ ok: true });
-});
-
-app.listen(process.env.PORT || 3000, () => console.log('Server started'));
+const port = process.env.PORT || 3000;
+app.listen(port, () => console.log(`Server running on ${port}`));
