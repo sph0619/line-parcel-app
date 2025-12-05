@@ -1,85 +1,139 @@
 <!DOCTYPE html>
-<html lang="zh-Hant">
+<html lang="zh-TW">
 <head>
-  <meta charset="UTF-8">
-  <title>包裹管理後台</title>
-  <style>
-    body { font-family: sans-serif; margin: 20px; }
-    input, button { padding: 5px; margin: 5px; }
-    table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-    th, td { border: 1px solid #ccc; padding: 5px; text-align: center; }
-  </style>
+<meta charset="UTF-8">
+<title>管理員介面</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+  th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+  input, select, button { padding: 5px; margin: 2px; }
+</style>
 </head>
 <body>
-  <h1>包裹管理後台</h1>
 
-  <h2>新增包裹</h2>
-  <form id="addForm">
-    住戶姓名: <input type="text" id="name" required>
-    UserId: <input type="text" id="userId" required>
-    包裹內容: <input type="text" id="content" required>
-    <button type="submit">新增</button>
-  </form>
+<h1>管理員介面</h1>
 
-  <h2>包裹列表</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>ID</th>
-        <th>姓名</th>
-        <th>UserId</th>
-        <th>內容</th>
-        <th>已領取</th>
-        <th>操作</th>
-      </tr>
-    </thead>
-    <tbody id="parcelTable"></tbody>
-  </table>
+<h2>住戶資料</h2>
+<table id="usersTable">
+  <thead>
+    <tr>
+      <th>戶名</th>
+      <th>姓名</th>
+      <th>LINE userId</th>
+      <th>操作</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
 
-  <script>
-    async function loadParcels() {
-      const res = await fetch('/api/parcels');
-      const parcels = await res.json();
-      const tbody = document.getElementById('parcelTable');
-      tbody.innerHTML = '';
-      parcels.forEach(p => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${p.id}</td>
-          <td>${p.name}</td>
-          <td>${p.userId}</td>
-          <td>${p.content}</td>
-          <td>${p.pickedUp ? '✅' : '❌'}</td>
-          <td>${!p.pickedUp ? `<button onclick="pickup(${p.id})">標記已領取</button>` : ''}</td>
-        `;
-        tbody.appendChild(tr);
-      });
-    }
+<h2>包裹資料</h2>
+<table id="parcelsTable">
+  <thead>
+    <tr>
+      <th>條碼號碼</th>
+      <th>戶名</th>
+      <th>狀態</th>
+      <th>操作</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
 
-    async function pickup(id) {
-      await fetch('/api/pickup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id })
-      });
-      loadParcels();
-    }
+<h2>新增包裹</h2>
+<form id="addParcelForm">
+  條碼號碼: <input type="text" name="parcelId" required>
+  戶名: <input type="text" name="houseId" required>
+  <button type="submit">新增</button>
+</form>
+<button id="scanBtn">用相機掃描條碼</button>
+<video id="preview" width="300" height="200" style="border:1px solid black;"></video>
 
-    document.getElementById('addForm').addEventListener('submit', async e => {
-      e.preventDefault();
-      const name = document.getElementById('name').value;
-      const userId = document.getElementById('userId').value;
-      const content = document.getElementById('content').value;
-      await fetch('/api/add-parcel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, userId, content })
-      });
-      document.getElementById('addForm').reset();
-      loadParcels();
-    });
+<script type="module">
+import QrScanner from "https://cdn.jsdelivr.net/npm/qr-scanner@1.4.2/qr-scanner.min.js";
 
-    loadParcels();
-  </script>
+const video = document.getElementById('preview');
+const scanner = new QrScanner(video, result => {
+  document.querySelector('input[name="parcelId"]').value = result;
+  scanner.stop();
+});
+
+document.getElementById('scanBtn').onclick = () => scanner.start();
+
+// 用 fetch 載入使用者與包裹資料
+async function loadData() {
+  const users = await fetch('/api/users').then(r => r.json());
+  const parcels = await fetch('/api/parcels').then(r => r.json());
+
+  const usersTbody = document.querySelector('#usersTable tbody');
+  usersTbody.innerHTML = '';
+  users.forEach(u => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${u.houseId}</td>
+      <td>${u.name}</td>
+      <td>${u.userId}</td>
+      <td>
+        <button onclick="deleteUser('${u.houseId}')">刪除</button>
+      </td>
+    `;
+    usersTbody.appendChild(tr);
+  });
+
+  const parcelsTbody = document.querySelector('#parcelsTable tbody');
+  parcelsTbody.innerHTML = '';
+  parcels.forEach(p => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${p.parcelId}</td>
+      <td>${p.houseId}</td>
+      <td>${p.status}</td>
+      <td>
+        <button onclick="markCollected('${p.parcelId}')">已領取</button>
+      </td>
+    `;
+    parcelsTbody.appendChild(tr);
+  });
+}
+
+// 新增包裹
+document.getElementById('addParcelForm').onsubmit = async e => {
+  e.preventDefault();
+  const form = e.target;
+  await fetch('/api/addParcel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      parcelId: form.parcelId.value,
+      houseId: form.houseId.value
+    })
+  });
+  form.reset();
+  loadData();
+};
+
+// 標記包裹已領取
+async function markCollected(parcelId) {
+  await fetch('/api/markCollected', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ parcelId })
+  });
+  loadData();
+}
+
+// 刪除住戶
+async function deleteUser(houseId) {
+  await fetch('/api/deleteUser', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ houseId })
+  });
+  loadData();
+}
+
+loadData();
+</script>
+
 </body>
 </html>
